@@ -43,90 +43,56 @@ export function useFluentDeck() {
   const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
-    let mounted = true;
+  if (!user) {
+    return;
+  }
 
-    async function loadUser() {
-      const {
-        data: { user: currentUser },
-      } = await supabase.auth.getUser();
+  const userId = user.id;
+  let active = true;
 
-      if (!mounted) {
+  async function loadCloudData() {
+    setDataLoading(true);
+    setCloudError(null);
+
+    try {
+      let nextData = await fetchCloudData(supabase, userId);
+
+      if (nextData.languages.length === 0) {
+        nextData = await seedCloudData(supabase, userId);
+      }
+
+      if (!active) {
         return;
       }
 
-      setUser(currentUser);
-      setAuthLoading(false);
-    }
+      setData(nextData);
+      setSelectedDeckId(nextData.decks[0]?.id ?? "");
+      setStudyDeckId("all");
+      setStudyIndex(0);
+      setRevealed(false);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load your Supabase data.";
 
-    loadUser();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-
-      if (!session?.user) {
-        setData(createInitialData());
-        setSelectedDeckId("");
-        setView("dashboard");
+      if (active) {
+        setCloudError(message);
       }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  useEffect(() => {
-    if (!user) {
-      return;
-    }
-
-    let active = true;
-
-    async function loadCloudData() {
-      setDataLoading(true);
-      setCloudError(null);
-
-      try {
-        let nextData = await fetchCloudData(supabase, user.id);
-
-        if (nextData.languages.length === 0) {
-          nextData = await seedCloudData(supabase, user.id);
-        }
-
-        if (!active) {
-          return;
-        }
-
-        setData(nextData);
-        setSelectedDeckId(nextData.decks[0]?.id ?? "");
-        setStudyDeckId("all");
-        setStudyIndex(0);
-        setRevealed(false);
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "Could not load your Supabase data.";
-
-        if (active) {
-          setCloudError(message);
-        }
-      } finally {
-        if (active) {
-          setDataLoading(false);
-        }
+    } finally {
+      if (active) {
+        setDataLoading(false);
       }
     }
+  }
 
-    loadCloudData();
+  loadCloudData();
 
-    return () => {
-      active = false;
-    };
-  }, [supabase, user]);
+  return () => {
+    active = false;
+  };
+}, [supabase, user]);
+
 
   const languageMap = useMemo(() => {
     return new Map(data.languages.map((language) => [language.id, language]));
