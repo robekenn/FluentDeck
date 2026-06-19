@@ -83,6 +83,7 @@ export default function FluentDeckApp() {
           onImportClick={() => fileInputRef.current?.click()}
           onReset={app.resetData}
           onSignOut={app.signOut}
+          onDeleteAccount={app.deleteAccount}
         />
 
         <input

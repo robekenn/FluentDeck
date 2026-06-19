@@ -378,6 +378,8 @@ export function useFluentDeck() {
     };
   }
 
+  
+
   async function signOut() {
     if (supabase) {
       await supabase.auth.signOut();
@@ -393,6 +395,85 @@ export function useFluentDeck() {
     setRevealed(false);
     setView("dashboard");
   }
+
+  async function deleteAccount() {
+  if (!supabase) {
+    setCloudError("Supabase is still loading. Please try again.");
+    return;
+  }
+
+  if (!user) {
+    setCloudError("Please sign in first.");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    "Are you sure you want to permanently delete your FluentDeck account? This will delete your account, languages, decks, cards, and review progress. This cannot be undone."
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  const secondConfirmed = window.confirm(
+    "Final confirmation: permanently delete your account?"
+  );
+
+  if (!secondConfirmed) {
+    return;
+  }
+
+  setDataLoading(true);
+  setCloudError(null);
+
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session?.access_token) {
+      throw new Error("Could not confirm your current session.");
+    }
+
+    const response = await fetch("/api/account/delete", {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+
+    const result = (await response.json()) as {
+      ok?: boolean;
+      error?: string;
+    };
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error ?? "Could not delete account.");
+    }
+
+    // Supabase notes that deleting a user does not automatically sign them out,
+    // so clear the local browser session after the server deletes the account.
+    await supabase.auth.signOut({ scope: "local" });
+
+    setUser(null);
+    setData(createInitialData());
+    setSelectedDeckId("");
+    setSelectedLanguageId("all");
+    setSearch("");
+    setStudyDeckId("all");
+    setStudyIndex(0);
+    setRevealed(false);
+    setView("dashboard");
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Could not delete account.";
+
+    setCloudError(message);
+  } finally {
+    setDataLoading(false);
+  }
+}
 
   async function createDeck(input: DeckInput) {
     const session = requireCloudSession();
@@ -693,6 +774,7 @@ export function useFluentDeck() {
     signIn,
     signUp,
     signOut,
+    deleteAccount,
 
     data,
     view,

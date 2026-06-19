@@ -1,5 +1,21 @@
+"use client";
+
 import type { View } from "../../lib/fluentdeck/types";
 import Button from "../ui/Button";
+
+type AppHeaderProps = {
+  view: View;
+  setView: (view: View) => void;
+  cardCount: number;
+  deckCount: number;
+  dueCount: number;
+  userEmail: string;
+  onExport: () => void;
+  onImportClick: () => void;
+  onReset: () => void | Promise<void>;
+  onSignOut: () => void | Promise<void>;
+  onDeleteAccount: () => void | Promise<void>;
+};
 
 export default function AppHeader({
   view,
@@ -12,18 +28,8 @@ export default function AppHeader({
   onImportClick,
   onReset,
   onSignOut,
-}: {
-  view: View;
-  setView: (view: View) => void;
-  cardCount: number;
-  deckCount: number;
-  dueCount: number;
-  userEmail: string;
-  onExport: () => void;
-  onImportClick: () => void;
-  onReset: () => void;
-  onSignOut: () => void;
-}) {
+  onDeleteAccount,
+}: AppHeaderProps) {
   return (
     <header className="mb-8 overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl shadow-black/30 backdrop-blur">
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
@@ -55,26 +61,42 @@ export default function AppHeader({
 
       <div className="mt-6 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <nav className="flex flex-wrap gap-3">
-          <TabButton active={view === "dashboard"} onClick={() => setView("dashboard")}>
+          <TabButton
+            active={view === "dashboard"}
+            onClick={() => setView("dashboard")}
+          >
             Dashboard
           </TabButton>
 
-          <TabButton active={view === "library"} onClick={() => setView("library")}>
+          <TabButton
+            active={view === "library"}
+            onClick={() => setView("library")}
+          >
             Library
           </TabButton>
 
-          <TabButton active={view === "study"} onClick={() => setView("study")}>
+          <TabButton
+            active={view === "study"}
+            onClick={() => setView("study")}
+          >
             Study
           </TabButton>
         </nav>
 
         <div className="flex flex-wrap gap-3">
           <Button onClick={onExport}>Export</Button>
+
           <Button onClick={onImportClick}>Import</Button>
+
           <Button variant="danger" onClick={onReset}>
-            Reset
+            Reset Data
           </Button>
+
           <Button onClick={onSignOut}>Sign Out</Button>
+
+          <Button variant="danger" onClick={onDeleteAccount}>
+            Delete Account
+          </Button>
         </div>
       </div>
     </header>
@@ -85,6 +107,7 @@ function HeaderStat({ label, value }: { label: string; value: number }) {
   return (
     <div className="min-w-20 rounded-2xl bg-white/[0.06] p-4 text-center">
       <p className="text-2xl font-black">{value}</p>
+
       <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">
         {label}
       </p>
