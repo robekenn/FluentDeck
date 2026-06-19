@@ -42,57 +42,113 @@ export function useFluentDeck() {
   const [studyIndex, setStudyIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
 
+  /**
+   * Load the currently signed-in Supabase user.
+   * This is required so the app knows whether to show AuthView or FluentDeck.
+   */
   useEffect(() => {
-  if (!user) {
-    return;
-  }
+    let mounted = true;
 
-  const userId = user.id;
-  let active = true;
+    async function loadUser() {
+      setAuthLoading(true);
 
-  async function loadCloudData() {
-    setDataLoading(true);
-    setCloudError(null);
+      const {
+        data: { user: currentUser },
+        error,
+      } = await supabase.auth.getUser();
 
-    try {
-      let nextData = await fetchCloudData(supabase, userId);
-
-      if (nextData.languages.length === 0) {
-        nextData = await seedCloudData(supabase, userId);
-      }
-
-      if (!active) {
+      if (!mounted) {
         return;
       }
 
-      setData(nextData);
-      setSelectedDeckId(nextData.decks[0]?.id ?? "");
-      setStudyDeckId("all");
-      setStudyIndex(0);
-      setRevealed(false);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Could not load your Supabase data.";
-
-      if (active) {
-        setCloudError(message);
+      if (error) {
+        setCloudError(error.message);
       }
-    } finally {
-      if (active) {
-        setDataLoading(false);
+
+      setUser(currentUser);
+      setAuthLoading(false);
+    }
+
+    loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+
+      if (!session?.user) {
+        setData(createInitialData());
+        setSelectedDeckId("");
+        setSelectedLanguageId("all");
+        setStudyDeckId("all");
+        setStudyIndex(0);
+        setRevealed(false);
+        setView("dashboard");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  /**
+   * Load cloud data whenever a user signs in.
+   * If this is the user's first time, seed starter FluentDeck data.
+   */
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    const userId = user.id;
+    let active = true;
+
+    async function loadCloudData() {
+      setDataLoading(true);
+      setCloudError(null);
+
+      try {
+        let nextData = await fetchCloudData(supabase, userId);
+
+        if (nextData.languages.length === 0) {
+          nextData = await seedCloudData(supabase, userId);
+        }
+
+        if (!active) {
+          return;
+        }
+
+        setData(nextData);
+        setSelectedDeckId(nextData.decks[0]?.id ?? "");
+        setSelectedLanguageId("all");
+        setStudyDeckId("all");
+        setStudyIndex(0);
+        setRevealed(false);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not load your Supabase data.";
+
+        if (active) {
+          setCloudError(message);
+        }
+      } finally {
+        if (active) {
+          setDataLoading(false);
+        }
       }
     }
-  }
 
-  loadCloudData();
+    loadCloudData();
 
-  return () => {
-    active = false;
-  };
-}, [supabase, user]);
-
+    return () => {
+      active = false;
+    };
+  }, [supabase, user]);
 
   const languageMap = useMemo(() => {
     return new Map(data.languages.map((language) => [language.id, language]));
@@ -106,9 +162,9 @@ export function useFluentDeck() {
     const map = new Map<string, FlashCard[]>();
 
     for (const card of data.cards) {
-      const current = map.get(card.deckId) ?? [];
-      current.push(card);
-      map.set(card.deckId, current);
+      const currentCards = map.get(card.deckId) ?? [];
+      currentCards.push(card);
+      map.set(card.deckId, currentCards);
     }
 
     return map;
@@ -224,6 +280,8 @@ export function useFluentDeck() {
   }
 
   async function signIn(email: string, password: string) {
+    setCloudError(null);
+
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
@@ -243,6 +301,8 @@ export function useFluentDeck() {
   }
 
   async function signUp(email: string, password: string) {
+    setCloudError(null);
+
     const { data: signUpData, error } = await supabase.auth.signUp({
       email,
       password,
@@ -271,9 +331,15 @@ export function useFluentDeck() {
 
   async function signOut() {
     await supabase.auth.signOut();
+
     setUser(null);
     setData(createInitialData());
     setSelectedDeckId("");
+    setSelectedLanguageId("all");
+    setSearch("");
+    setStudyDeckId("all");
+    setStudyIndex(0);
+    setRevealed(false);
     setView("dashboard");
   }
 
@@ -292,6 +358,8 @@ export function useFluentDeck() {
       setCloudError(error.message);
       return;
     }
+
+    setCloudError(null);
 
     setData((current) => ({
       ...current,
@@ -334,11 +402,18 @@ export function useFluentDeck() {
       return;
     }
 
-    setData((current) => ({
-      ...current,
-      decks: current.decks.filter((item) => item.id !== deckId),
-      cards: current.cards.filter((card) => card.deckId !== deckId),
-    }));
+    setCloudError(null);
+
+    setData((current) => {
+      const nextDecks = current.decks.filter((item) => item.id !== deckId);
+      const nextCards = current.cards.filter((card) => card.deckId !== deckId);
+
+      return {
+        ...current,
+        decks: nextDecks,
+        cards: nextCards,
+      };
+    });
 
     if (selectedDeckId === deckId) {
       const nextDeck = data.decks.find((item) => item.id !== deckId);
@@ -354,14 +429,15 @@ export function useFluentDeck() {
     }
 
     if (input.id) {
-      const currentCard = data.cards.find((card) => card.id === input.id);
+      const existingCard = data.cards.find((card) => card.id === input.id);
 
-      if (!currentCard) {
+      if (!existingCard) {
+        setCloudError("Could not find the card you are trying to update.");
         return;
       }
 
       const updatedCard: FlashCard = {
-        ...currentCard,
+        ...existingCard,
         deckId: input.deckId,
         front: input.front.trim(),
         back: input.back.trim(),
@@ -383,6 +459,8 @@ export function useFluentDeck() {
         return;
       }
 
+      setCloudError(null);
+
       setData((current) => ({
         ...current,
         cards: current.cards.map((card) =>
@@ -401,6 +479,8 @@ export function useFluentDeck() {
       setCloudError(error.message);
       return;
     }
+
+    setCloudError(null);
 
     setData((current) => ({
       ...current,
@@ -432,6 +512,8 @@ export function useFluentDeck() {
       return;
     }
 
+    setCloudError(null);
+
     setData((current) => ({
       ...current,
       cards: current.cards.filter((card) => card.id !== cardId),
@@ -458,6 +540,8 @@ export function useFluentDeck() {
       setCloudError(error.message);
       return;
     }
+
+    setCloudError(null);
 
     setData((current) => ({
       ...current,
@@ -515,6 +599,8 @@ export function useFluentDeck() {
 
       setData(nextData);
       setSelectedDeckId(nextData.decks[0]?.id ?? "");
+      setSelectedLanguageId("all");
+      setSearch("");
       setStudyDeckId("all");
       setStudyIndex(0);
       setRevealed(false);
@@ -543,6 +629,7 @@ export function useFluentDeck() {
 
   return {
     supabase,
+
     authLoading,
     dataLoading,
     cloudError,
