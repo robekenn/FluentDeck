@@ -5,6 +5,7 @@ import { useFluentDeck } from "../../hooks/useFluentDeck";
 import { isValidImport } from "../../lib/fluentdeck/storage";
 import { todayISO } from "../../lib/fluentdeck/dates";
 import AppHeader from "./AppHeader";
+import AuthView from "../auth/AuthView";
 import DashboardView from "../dashboard/DashboardView";
 import LibraryView from "../library/LibraryView";
 import StudyView from "../study/StudyView";
@@ -43,12 +44,29 @@ export default function FluentDeckApp() {
         throw new Error("Invalid FluentDeck backup.");
       }
 
-      app.replaceData(parsed);
+      await app.replaceData(parsed);
     } catch {
-      window.alert("That file could not be imported. Make sure it is a FluentDeck JSON backup.");
+      window.alert(
+        "That file could not be imported. Make sure it is a FluentDeck JSON backup."
+      );
     } finally {
       event.target.value = "";
     }
+  }
+
+  if (app.authLoading) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-4 text-slate-100">
+        <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-8 text-center">
+          <h1 className="text-3xl font-black">FluentDeck</h1>
+          <p className="mt-3 text-slate-400">Checking your session...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!app.user) {
+    return <AuthView onSignIn={app.signIn} onSignUp={app.signUp} />;
   }
 
   return (
@@ -60,9 +78,11 @@ export default function FluentDeckApp() {
           cardCount={app.data.cards.length}
           deckCount={app.data.decks.length}
           dueCount={app.dueCards.length}
+          userEmail={app.user.email ?? "Signed in"}
           onExport={exportData}
           onImportClick={() => fileInputRef.current?.click()}
           onReset={app.resetData}
+          onSignOut={app.signOut}
         />
 
         <input
@@ -72,6 +92,18 @@ export default function FluentDeckApp() {
           className="hidden"
           onChange={importData}
         />
+
+        {app.cloudError && (
+          <div className="mb-6 rounded-3xl border border-red-400/30 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+            {app.cloudError}
+          </div>
+        )}
+
+        {app.dataLoading && (
+          <div className="mb-6 rounded-3xl border border-white/10 bg-white/[0.05] p-4 text-sm text-slate-300">
+            Syncing with Supabase...
+          </div>
+        )}
 
         {app.view === "dashboard" && (
           <DashboardView

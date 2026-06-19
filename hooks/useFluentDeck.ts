@@ -1,8 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
+import { createSupabaseBrowserClient } from "../lib/supabase/client";
+import {
+  cardToRow,
+  deckToRow,
+  fetchCloudData,
+  replaceCloudData,
+  seedCloudData,
+} from "../lib/fluentdeck/cloud";
 import { createInitialData, makeCard, makeDeck } from "../lib/fluentdeck/seed";
-import { loadStoredData, saveStoredData } from "../lib/fluentdeck/storage";
 import { isDue, reviewCard } from "../lib/fluentdeck/srs";
 import type {
   AppData,
@@ -15,7 +23,13 @@ import type {
 } from "../lib/fluentdeck/types";
 
 export function useFluentDeck() {
-  const [ready, setReady] = useState(false);
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
+
+  const [user, setUser] = useState<User | null>(null);
   const [data, setData] = useState<AppData>(() => createInitialData());
 
   const [view, setView] = useState<View>("dashboard");
@@ -29,18 +43,90 @@ export function useFluentDeck() {
   const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
-    const stored = loadStoredData();
+    let mounted = true;
 
-    setData(stored);
-    setSelectedDeckId(stored.decks[0]?.id ?? "");
-    setReady(true);
-  }, []);
+    async function loadUser() {
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser();
+
+      if (!mounted) {
+        return;
+      }
+
+      setUser(currentUser);
+      setAuthLoading(false);
+    }
+
+    loadUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+
+      if (!session?.user) {
+        setData(createInitialData());
+        setSelectedDeckId("");
+        setView("dashboard");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   useEffect(() => {
-    if (ready) {
-      saveStoredData(data);
+    if (!user) {
+      return;
     }
-  }, [data, ready]);
+
+    let active = true;
+
+    async function loadCloudData() {
+      setDataLoading(true);
+      setCloudError(null);
+
+      try {
+        let nextData = await fetchCloudData(supabase, user.id);
+
+        if (nextData.languages.length === 0) {
+          nextData = await seedCloudData(supabase, user.id);
+        }
+
+        if (!active) {
+          return;
+        }
+
+        setData(nextData);
+        setSelectedDeckId(nextData.decks[0]?.id ?? "");
+        setStudyDeckId("all");
+        setStudyIndex(0);
+        setRevealed(false);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not load your Supabase data.";
+
+        if (active) {
+          setCloudError(message);
+        }
+      } finally {
+        if (active) {
+          setDataLoading(false);
+        }
+      }
+    }
+
+    loadCloudData();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase, user]);
 
   const languageMap = useMemo(() => {
     return new Map(data.languages.map((language) => [language.id, language]));
@@ -63,6 +149,7 @@ export function useFluentDeck() {
   }, [data.cards]);
 
   const selectedDeck = deckMap.get(selectedDeckId) ?? null;
+
   const selectedDeckLanguage = selectedDeck
     ? languageMap.get(selectedDeck.languageId) ?? null
     : null;
@@ -161,8 +248,84 @@ export function useFluentDeck() {
     }
   }, [studyCards.length, studyIndex]);
 
-  function createDeck(input: DeckInput) {
+  function requireUserId() {
+    if (!user) {
+      setCloudError("Please sign in first.");
+      return null;
+    }
+
+    return user.id;
+  }
+
+  async function signIn(email: string, password: string) {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      return {
+        ok: false,
+        message: error.message,
+      };
+    }
+
+    return {
+      ok: true,
+      message: "Signed in.",
+    };
+  }
+
+  async function signUp(email: string, password: string) {
+    const { data: signUpData, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    if (error) {
+      return {
+        ok: false,
+        message: error.message,
+      };
+    }
+
+    if (signUpData.session) {
+      return {
+        ok: true,
+        message: "Account created. Your starter decks are being prepared.",
+      };
+    }
+
+    return {
+      ok: true,
+      message:
+        "Account created. Check your email to confirm your account, then sign in.",
+    };
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setUser(null);
+    setData(createInitialData());
+    setSelectedDeckId("");
+    setView("dashboard");
+  }
+
+  async function createDeck(input: DeckInput) {
+    const userId = requireUserId();
+
+    if (!userId) {
+      return;
+    }
+
     const deck = makeDeck(input);
+
+    const { error } = await supabase.from("decks").insert(deckToRow(deck, userId));
+
+    if (error) {
+      setCloudError(error.message);
+      return;
+    }
 
     setData((current) => ({
       ...current,
@@ -173,7 +336,13 @@ export function useFluentDeck() {
     setView("library");
   }
 
-  function deleteDeck(deckId: string) {
+  async function deleteDeck(deckId: string) {
+    const userId = requireUserId();
+
+    if (!userId) {
+      return;
+    }
+
     const deck = deckMap.get(deckId);
 
     if (!deck) {
@@ -185,6 +354,17 @@ export function useFluentDeck() {
     );
 
     if (!confirmed) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("decks")
+      .delete()
+      .eq("user_id", userId)
+      .eq("id", deckId);
+
+    if (error) {
+      setCloudError(error.message);
       return;
     }
 
@@ -200,27 +380,48 @@ export function useFluentDeck() {
     }
   }
 
-  function upsertCard(input: CardInput) {
+  async function upsertCard(input: CardInput) {
+    const userId = requireUserId();
+
+    if (!userId) {
+      return;
+    }
+
     if (input.id) {
+      const currentCard = data.cards.find((card) => card.id === input.id);
+
+      if (!currentCard) {
+        return;
+      }
+
+      const updatedCard: FlashCard = {
+        ...currentCard,
+        deckId: input.deckId,
+        front: input.front.trim(),
+        back: input.back.trim(),
+        transliteration: input.transliteration.trim(),
+        example: input.example.trim(),
+        notes: input.notes.trim(),
+        tags: input.tags,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from("cards")
+        .update(cardToRow(updatedCard, userId))
+        .eq("user_id", userId)
+        .eq("id", updatedCard.id);
+
+      if (error) {
+        setCloudError(error.message);
+        return;
+      }
+
       setData((current) => ({
         ...current,
-        cards: current.cards.map((card) => {
-          if (card.id !== input.id) {
-            return card;
-          }
-
-          return {
-            ...card,
-            deckId: input.deckId,
-            front: input.front.trim(),
-            back: input.back.trim(),
-            transliteration: input.transliteration.trim(),
-            example: input.example.trim(),
-            notes: input.notes.trim(),
-            tags: input.tags,
-            updatedAt: new Date().toISOString(),
-          };
-        }),
+        cards: current.cards.map((card) =>
+          card.id === updatedCard.id ? updatedCard : card
+        ),
       }));
 
       return;
@@ -228,16 +429,40 @@ export function useFluentDeck() {
 
     const card = makeCard(input);
 
+    const { error } = await supabase.from("cards").insert(cardToRow(card, userId));
+
+    if (error) {
+      setCloudError(error.message);
+      return;
+    }
+
     setData((current) => ({
       ...current,
       cards: [card, ...current.cards],
     }));
   }
 
-  function deleteCard(cardId: string) {
+  async function deleteCard(cardId: string) {
+    const userId = requireUserId();
+
+    if (!userId) {
+      return;
+    }
+
     const confirmed = window.confirm("Delete this card?");
 
     if (!confirmed) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("cards")
+      .delete()
+      .eq("user_id", userId)
+      .eq("id", cardId);
+
+    if (error) {
+      setCloudError(error.message);
       return;
     }
 
@@ -247,17 +472,31 @@ export function useFluentDeck() {
     }));
   }
 
-  function reviewCurrentCard(rating: StudyRating) {
-    if (!currentStudyCard) {
+  async function reviewCurrentCard(rating: StudyRating) {
+    const userId = requireUserId();
+
+    if (!userId || !currentStudyCard) {
       return;
     }
 
     const oldLength = studyCards.length;
+    const reviewedCard = reviewCard(currentStudyCard, rating);
+
+    const { error } = await supabase
+      .from("cards")
+      .update(cardToRow(reviewedCard, userId))
+      .eq("user_id", userId)
+      .eq("id", reviewedCard.id);
+
+    if (error) {
+      setCloudError(error.message);
+      return;
+    }
 
     setData((current) => ({
       ...current,
       cards: current.cards.map((card) =>
-        card.id === currentStudyCard.id ? reviewCard(card, rating) : card
+        card.id === reviewedCard.id ? reviewedCard : card
       ),
     }));
 
@@ -295,29 +534,58 @@ export function useFluentDeck() {
     setRevealed(false);
   }
 
-  function replaceData(nextData: AppData) {
-    setData(nextData);
-    setSelectedDeckId(nextData.decks[0]?.id ?? "");
-    setStudyDeckId("all");
-    setStudyIndex(0);
-    setRevealed(false);
-    setView("dashboard");
+  async function replaceData(nextData: AppData) {
+    const userId = requireUserId();
+
+    if (!userId) {
+      return;
+    }
+
+    setDataLoading(true);
+    setCloudError(null);
+
+    try {
+      await replaceCloudData(supabase, userId, nextData);
+
+      setData(nextData);
+      setSelectedDeckId(nextData.decks[0]?.id ?? "");
+      setStudyDeckId("all");
+      setStudyIndex(0);
+      setRevealed(false);
+      setView("dashboard");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not replace cloud data.";
+
+      setCloudError(message);
+    } finally {
+      setDataLoading(false);
+    }
   }
 
-  function resetData() {
+  async function resetData() {
     const confirmed = window.confirm(
-      "Reset everything back to the starter FluentDeck data? This will replace your current browser data."
+      "Reset your FluentDeck data back to the starter decks? This only affects your signed-in account."
     );
 
     if (!confirmed) {
       return;
     }
 
-    replaceData(createInitialData());
+    await replaceData(createInitialData());
   }
 
   return {
-    ready,
+    supabase,
+    authLoading,
+    dataLoading,
+    cloudError,
+
+    user,
+    signIn,
+    signUp,
+    signOut,
+
     data,
     view,
     setView,

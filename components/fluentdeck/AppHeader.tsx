@@ -7,25 +7,29 @@ export default function AppHeader({
   cardCount,
   deckCount,
   dueCount,
+  userEmail,
   onExport,
   onImportClick,
   onReset,
+  onSignOut,
 }: {
   view: View;
   setView: (view: View) => void;
   cardCount: number;
   deckCount: number;
   dueCount: number;
+  userEmail: string;
   onExport: () => void;
   onImportClick: () => void;
   onReset: () => void;
+  onSignOut: () => void;
 }) {
   return (
     <header className="mb-8 overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.06] p-6 shadow-2xl shadow-black/30 backdrop-blur">
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="mb-4 inline-flex rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-slate-300">
-            French • Spanish • Hebrew • More
+            French • Spanish • Hebrew • Supabase Sync
           </div>
 
           <h1 className="text-4xl font-black tracking-tight sm:text-6xl">
@@ -33,8 +37,12 @@ export default function AppHeader({
           </h1>
 
           <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300 sm:text-lg">
-            A calm, organized flashcard space for building vocabulary and reviewing
-            languages over time.
+            A calm, organized flashcard space for building vocabulary and
+            reviewing languages over time.
+          </p>
+
+          <p className="mt-3 text-sm text-slate-500">
+            Signed in as <span className="text-slate-300">{userEmail}</span>
           </p>
         </div>
 
@@ -50,9 +58,11 @@ export default function AppHeader({
           <TabButton active={view === "dashboard"} onClick={() => setView("dashboard")}>
             Dashboard
           </TabButton>
+
           <TabButton active={view === "library"} onClick={() => setView("library")}>
             Library
           </TabButton>
+
           <TabButton active={view === "study"} onClick={() => setView("study")}>
             Study
           </TabButton>
@@ -64,6 +74,7 @@ export default function AppHeader({
           <Button variant="danger" onClick={onReset}>
             Reset
           </Button>
+          <Button onClick={onSignOut}>Sign Out</Button>
         </div>
       </div>
     </header>
