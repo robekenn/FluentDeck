@@ -55,7 +55,7 @@ export default function AuthView({
       <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl items-center gap-8 lg:grid-cols-[1.1fr_0.9fr]">
         <section>
           <div className="mb-4 inline-flex rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-slate-300">
-            French • Spanish • Hebrew • Cloud Sync
+            French • Spanish • Hebrew • More
           </div>
 
           <h1 className="text-5xl font-black tracking-tight sm:text-7xl">

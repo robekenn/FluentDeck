@@ -29,7 +29,7 @@ export default function AppHeader({
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="mb-4 inline-flex rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-slate-300">
-            French • Spanish • Hebrew • Supabase Sync
+            French • Spanish • Hebrew • More
           </div>
 
           <h1 className="text-4xl font-black tracking-tight sm:text-6xl">
