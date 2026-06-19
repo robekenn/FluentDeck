@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { User } from "@supabase/supabase-js";
-import { createSupabaseBrowserClient } from "../lib/supabase/client";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
 import {
   cardToRow,
   deckToRow,
@@ -21,9 +20,12 @@ import type {
   StudyRating,
   View,
 } from "../lib/fluentdeck/types";
+import type { Database } from "../lib/supabase/types";
+
+type FluentDeckSupabase = SupabaseClient<Database>;
 
 export function useFluentDeck() {
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const [supabase, setSupabase] = useState<FluentDeckSupabase | null>(null);
 
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
@@ -42,67 +44,91 @@ export function useFluentDeck() {
   const [studyIndex, setStudyIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
 
-  /**
-   * Load the currently signed-in Supabase user.
-   * This is required so the app knows whether to show AuthView or FluentDeck.
-   */
   useEffect(() => {
     let mounted = true;
+    let unsubscribe: (() => void) | null = null;
 
-    async function loadUser() {
+    async function initializeSupabase() {
       setAuthLoading(true);
+      setCloudError(null);
 
-      const {
-        data: { user: currentUser },
-        error,
-      } = await supabase.auth.getUser();
+      try {
+        const { createSupabaseBrowserClient } = await import(
+          "../lib/supabase/client"
+        );
 
-      if (!mounted) {
-        return;
+        if (!mounted) {
+          return;
+        }
+
+        const client = createSupabaseBrowserClient();
+        setSupabase(client);
+
+        const {
+          data: { user: currentUser },
+          error,
+        } = await client.auth.getUser();
+
+        if (!mounted) {
+          return;
+        }
+
+        if (error) {
+          setCloudError(error.message);
+        }
+
+        setUser(currentUser);
+        setAuthLoading(false);
+
+        const {
+          data: { subscription },
+        } = client.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user ?? null);
+          setAuthLoading(false);
+
+          if (!session?.user) {
+            setData(createInitialData());
+            setSelectedDeckId("");
+            setSelectedLanguageId("all");
+            setSearch("");
+            setStudyDeckId("all");
+            setStudyIndex(0);
+            setRevealed(false);
+            setView("dashboard");
+          }
+        });
+
+        unsubscribe = () => subscription.unsubscribe();
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not initialize Supabase.";
+
+        if (mounted) {
+          setCloudError(message);
+          setAuthLoading(false);
+        }
       }
-
-      if (error) {
-        setCloudError(error.message);
-      }
-
-      setUser(currentUser);
-      setAuthLoading(false);
     }
 
-    loadUser();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setAuthLoading(false);
-
-      if (!session?.user) {
-        setData(createInitialData());
-        setSelectedDeckId("");
-        setSelectedLanguageId("all");
-        setStudyDeckId("all");
-        setStudyIndex(0);
-        setRevealed(false);
-        setView("dashboard");
-      }
-    });
+    initializeSupabase();
 
     return () => {
       mounted = false;
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
 
-  /**
-   * Load cloud data whenever a user signs in.
-   * If this is the user's first time, seed starter FluentDeck data.
-   */
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, []);
+
   useEffect(() => {
-    if (!user) {
+    if (!supabase || !user) {
       return;
     }
 
+    const client = supabase;
     const userId = user.id;
     let active = true;
 
@@ -111,10 +137,10 @@ export function useFluentDeck() {
       setCloudError(null);
 
       try {
-        let nextData = await fetchCloudData(supabase, userId);
+        let nextData = await fetchCloudData(client, userId);
 
         if (nextData.languages.length === 0) {
-          nextData = await seedCloudData(supabase, userId);
+          nextData = await seedCloudData(client, userId);
         }
 
         if (!active) {
@@ -124,6 +150,7 @@ export function useFluentDeck() {
         setData(nextData);
         setSelectedDeckId(nextData.decks[0]?.id ?? "");
         setSelectedLanguageId("all");
+        setSearch("");
         setStudyDeckId("all");
         setStudyIndex(0);
         setRevealed(false);
@@ -270,16 +297,31 @@ export function useFluentDeck() {
     }
   }, [studyCards.length, studyIndex]);
 
-  function requireUserId() {
+  function requireCloudSession() {
+    if (!supabase) {
+      setCloudError("Supabase is still loading. Please try again.");
+      return null;
+    }
+
     if (!user) {
       setCloudError("Please sign in first.");
       return null;
     }
 
-    return user.id;
+    return {
+      supabase,
+      userId: user.id,
+    };
   }
 
   async function signIn(email: string, password: string) {
+    if (!supabase) {
+      return {
+        ok: false,
+        message: "Supabase is still loading. Please try again.",
+      };
+    }
+
     setCloudError(null);
 
     const { error } = await supabase.auth.signInWithPassword({
@@ -301,6 +343,13 @@ export function useFluentDeck() {
   }
 
   async function signUp(email: string, password: string) {
+    if (!supabase) {
+      return {
+        ok: false,
+        message: "Supabase is still loading. Please try again.",
+      };
+    }
+
     setCloudError(null);
 
     const { data: signUpData, error } = await supabase.auth.signUp({
@@ -330,7 +379,9 @@ export function useFluentDeck() {
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
 
     setUser(null);
     setData(createInitialData());
@@ -344,15 +395,17 @@ export function useFluentDeck() {
   }
 
   async function createDeck(input: DeckInput) {
-    const userId = requireUserId();
+    const session = requireCloudSession();
 
-    if (!userId) {
+    if (!session) {
       return;
     }
 
     const deck = makeDeck(input);
 
-    const { error } = await supabase.from("decks").insert(deckToRow(deck, userId));
+    const { error } = await session.supabase
+      .from("decks")
+      .insert(deckToRow(deck, session.userId));
 
     if (error) {
       setCloudError(error.message);
@@ -371,9 +424,9 @@ export function useFluentDeck() {
   }
 
   async function deleteDeck(deckId: string) {
-    const userId = requireUserId();
+    const session = requireCloudSession();
 
-    if (!userId) {
+    if (!session) {
       return;
     }
 
@@ -391,10 +444,10 @@ export function useFluentDeck() {
       return;
     }
 
-    const { error } = await supabase
+    const { error } = await session.supabase
       .from("decks")
       .delete()
-      .eq("user_id", userId)
+      .eq("user_id", session.userId)
       .eq("id", deckId);
 
     if (error) {
@@ -422,9 +475,9 @@ export function useFluentDeck() {
   }
 
   async function upsertCard(input: CardInput) {
-    const userId = requireUserId();
+    const session = requireCloudSession();
 
-    if (!userId) {
+    if (!session) {
       return;
     }
 
@@ -448,10 +501,10 @@ export function useFluentDeck() {
         updatedAt: new Date().toISOString(),
       };
 
-      const { error } = await supabase
+      const { error } = await session.supabase
         .from("cards")
-        .update(cardToRow(updatedCard, userId))
-        .eq("user_id", userId)
+        .update(cardToRow(updatedCard, session.userId))
+        .eq("user_id", session.userId)
         .eq("id", updatedCard.id);
 
       if (error) {
@@ -473,7 +526,9 @@ export function useFluentDeck() {
 
     const card = makeCard(input);
 
-    const { error } = await supabase.from("cards").insert(cardToRow(card, userId));
+    const { error } = await session.supabase
+      .from("cards")
+      .insert(cardToRow(card, session.userId));
 
     if (error) {
       setCloudError(error.message);
@@ -489,9 +544,9 @@ export function useFluentDeck() {
   }
 
   async function deleteCard(cardId: string) {
-    const userId = requireUserId();
+    const session = requireCloudSession();
 
-    if (!userId) {
+    if (!session) {
       return;
     }
 
@@ -501,10 +556,10 @@ export function useFluentDeck() {
       return;
     }
 
-    const { error } = await supabase
+    const { error } = await session.supabase
       .from("cards")
       .delete()
-      .eq("user_id", userId)
+      .eq("user_id", session.userId)
       .eq("id", cardId);
 
     if (error) {
@@ -521,19 +576,19 @@ export function useFluentDeck() {
   }
 
   async function reviewCurrentCard(rating: StudyRating) {
-    const userId = requireUserId();
+    const session = requireCloudSession();
 
-    if (!userId || !currentStudyCard) {
+    if (!session || !currentStudyCard) {
       return;
     }
 
     const oldLength = studyCards.length;
     const reviewedCard = reviewCard(currentStudyCard, rating);
 
-    const { error } = await supabase
+    const { error } = await session.supabase
       .from("cards")
-      .update(cardToRow(reviewedCard, userId))
-      .eq("user_id", userId)
+      .update(cardToRow(reviewedCard, session.userId))
+      .eq("user_id", session.userId)
       .eq("id", reviewedCard.id);
 
     if (error) {
@@ -585,9 +640,9 @@ export function useFluentDeck() {
   }
 
   async function replaceData(nextData: AppData) {
-    const userId = requireUserId();
+    const session = requireCloudSession();
 
-    if (!userId) {
+    if (!session) {
       return;
     }
 
@@ -595,7 +650,7 @@ export function useFluentDeck() {
     setCloudError(null);
 
     try {
-      await replaceCloudData(supabase, userId, nextData);
+      await replaceCloudData(session.supabase, session.userId, nextData);
 
       setData(nextData);
       setSelectedDeckId(nextData.decks[0]?.id ?? "");
